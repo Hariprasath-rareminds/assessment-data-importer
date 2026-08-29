@@ -407,14 +407,42 @@ def selected_option_key(options: Dict[str, Any], answer: Any) -> Optional[str]:
     return None
 
 
+def _answer_candidates_for_match(value: Any) -> List[str]:
+    """Return normalized comparison candidates without changing stored output."""
+    raw = normalize_answer(value)
+    candidates = {norm_answer_cmp(raw)}
+
+    # Excel may expose percentage options as decimals (0.2) while the
+    # question bank stores the displayed option (20%). Compare both forms.
+    compact = raw.replace(",", "").strip()
+    try:
+        if compact.endswith("%"):
+            numeric = float(compact[:-1]) / 100
+            candidates.add(format(numeric, ".12g"))
+        else:
+            numeric = float(compact)
+            if 0 <= numeric <= 1:
+                percent = numeric * 100
+                candidates.add(format(percent, ".12g") + "%")
+    except ValueError:
+        pass
+
+    return list(candidates)
+
+
 def ai_answer_for_storage(answer: Any, options: List[Any]) -> str:
-    # Existing personal_assessment_attempts sample stores displayed answer text,
-    # without leading "A. "/"B. " prefixes.
+    """Map a Google/Excel answer to the exact original question-bank option."""
     raw = normalize_answer(answer)
+    answer_candidates = set(_answer_candidates_for_match(raw))
+
     for opt in options:
         opt_text = normalize_answer(opt)
-        if norm_answer_cmp(opt_text) == norm_answer_cmp(raw):
-            return re.sub(r"^[A-D][.)]\s*", "", opt_text)
+        option_candidates = set(_answer_candidates_for_match(opt_text))
+        if answer_candidates & option_candidates:
+            # Store the exact bank option, including A./B./C./D. and %.
+            return opt_text
+
+    # If no option matches, preserve the source answer for validation/debugging.
     return raw
 
 
