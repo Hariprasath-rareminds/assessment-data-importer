@@ -1003,13 +1003,24 @@ def generate_student_sql(data: Dict[str, Any]) -> str:
     started = data["started_at"]
     completed = data["completed_at"]
 
-    # The sample learner uses stream_id='college' for MBA/PG assessment.
+    # Program-specific assessment stream. personal_assessment_streams contains
+    # dedicated rows with ids `mba` and `mca`; grade_level remains `college`.
+    program = (data.get("program") or "").upper()
+    if program == "MCA":
+        stream_id = "mca"
+        program_name = "Master of Computer Applications"
+    elif program == "MBA":
+        stream_id = "mba"
+        program_name = "Master of Business Administration"
+    else:
+        raise ValueError(f"Unsupported assessment program for {email}: {program!r}")
+
     learner_context = {
         "rawGrade": "PG",
         "degreeLevel": "Postgraduate",
-        "programCode": data.get("program") or "",
-        "programName": "Master of Computer Applications" if data.get("program") == "MCA" else "Master of Business Administration",
-        "selectedStream": "college",
+        "programCode": program,
+        "programName": program_name,
+        "selectedStream": stream_id,
         "migrationSource": "google_forms",
     }
 
@@ -1045,7 +1056,7 @@ def generate_student_sql(data: Dict[str, Any]) -> str:
         "        grade_level, adaptive_aptitude_session_id, all_responses, aptitude_scores, knowledge_scores,",
         "        aptitude_question_timer, learner_context",
         "    ) VALUES (",
-        f"        {sql_literal(attempt_id)}::uuid, v_learner_id, 'college', {sql_literal(started)}, {sql_literal(completed)},",
+        f"        {sql_literal(attempt_id)}::uuid, v_learner_id, {sql_literal(stream_id)}, {sql_literal(started)}, {sql_literal(completed)},",
         "        'completed', 6, 19, '{}'::jsonb,",
         f"        {sql_literal(started)}, {sql_literal(completed)}, NULL, 0, 'college', {sql_literal(session_id)}::uuid,",
         f"        {sql_literal(data['all_responses'])}, NULL, NULL, NULL,",
