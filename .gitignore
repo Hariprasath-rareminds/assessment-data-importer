@@ -1,0 +1,22 @@
+# Generated seed files and reports
+output/
+seeds/
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Excel temporary lock files
+~$*.xlsx
+~$*.xls
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

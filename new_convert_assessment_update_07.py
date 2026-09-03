@@ -1057,7 +1057,7 @@ def generate_student_sql(data: Dict[str, Any]) -> str:
         "        aptitude_question_timer, learner_context",
         "    ) VALUES (",
         f"        {sql_literal(attempt_id)}::uuid, v_learner_id, {sql_literal(stream_id)}, {sql_literal(started)}, {sql_literal(completed)},",
-        "        'completed', 6, 19, '{}'::jsonb,",
+        "        'in_progress', 6, 19, '{}'::jsonb,",
         f"        {sql_literal(started)}, {sql_literal(completed)}, NULL, 0, 'college', {sql_literal(session_id)}::uuid,",
         f"        {sql_literal(data['all_responses'])}, NULL, NULL, NULL,",
         f"        {sql_literal(learner_context)}",

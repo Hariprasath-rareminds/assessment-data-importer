@@ -1,159 +1,142 @@
-# Assessment Import Script - Run Guide
+# Assessment Import Script - Run Guide (`new_convert_assessment_update_07.py`)
 
 ## Purpose
 
-`convert_assessment.py` converts Google Forms assessment answers into
-PostgreSQL/Supabase seed SQL files.
+`new_convert_assessment_update_07.py` converts student Google Forms assessment answers into PostgreSQL/Supabase seed SQL files.
 
-It: - Reads `Assessment Answers.xlsx`. - Uses `question_bank.xlsx` to
-map answers to existing question UUIDs. - Uses
-`career_assessment_ai_questions_rows.sql` for AI/MBA question
-mappings. - Validates student responses. - Creates one SQL seed file per
-valid student. - Does not insert into `personal_assessment_results`.
+### Key Rules
+- **Learners are never created:** The SQL resolves existing learner records by email. The learner must already exist in `public.learners`.
+- **Question UUIDs are never generated:** Existing question UUIDs from the question bank are strictly reused.
+- **Target tables only:**
+  1. `public.adaptive_aptitude_sessions`
+  2. `public.personal_assessment_attempts`
+  3. `public.adaptive_aptitude_responses`
+  4. `public.adaptive_aptitude_results`
+- **Does not insert into `personal_assessment_results`** (those are handled by separate result seeds).
 
-Generated seeds insert into: 1. `adaptive_aptitude_sessions` 2.
-`personal_assessment_attempts` 3. `adaptive_aptitude_responses` 4.
-`adaptive_aptitude_results`
+---
 
-## Required Files
+## Command Syntax
 
-``` text
-assessment-import/
-|-- convert_assessment.py
-|-- Assessment Answers.xlsx
-|-- question_bank.xlsx
-`-- career_assessment_ai_questions_rows.sql
+```powershell
+python new_convert_assessment_update_07.py "Assessment profiling answers.xlsx" --question-bank "question_bank.xlsx" --production-data "PRODUCTION_ASSESSMENT.xlsx" --allow-partial
 ```
 
-## 1. Check Python
+---
 
-``` powershell
-python --version
-```
+## Required Input Files & Where They Are Used
 
-If needed:
+### 1. File 1: Student Answers Workbook (Positional Argument: `answers`)
+* **Default:** `"Assessment Answers.xlsx"` (or specified filename e.g. `"Assessment profiling answers.xlsx"`)
+* **Loaded in:** `load_form_students(path)` (lines 593–618)
+* **What it is:** Raw student submissions exported directly from Google Forms / Google Sheets.
+* **Expected Sheets (`FORM_SHEETS`):**
+  * `Big5` $\to$ mapped to `bigfive`
+  * `Riasec` $\to$ mapped to `riasec`
+  * `Employability Assessment ` $\to$ mapped to `employability`
+  * `Work Values` $\to$ mapped to `values`
+  * `Genearl Apt` $\to$ mapped to `adaptive_aptitude`
+  * `MBA Domain knowledge` $\to$ mapped to `mba_knowledge` (MBA only)
+  * `mba apt` $\to$ mapped to `mba_aptitude` (MBA only)
+  * `mca domain ` $\to$ mapped to `mca_knowledge` (MCA only)
+  * `mca apt` $\to$ mapped to `mca_aptitude` (MCA only)
+* **Where it is used in the code:**
+  * Extracts each student's **Email**, **Full Name**, **Program/Stream** (`MBA` vs `MCA`), and submission timestamps.
+  * Used in `convert_student(...)` (lines 773–995) to parse raw responses:
+    * Likert text (e.g., *"Very Accurate"*, *"Strongly Like"*) $\to$ scores $1\text{--}5$.
+    * Situational Judgment Tests (SJT Best/Worst choices) $\to$ paired JSON objects.
+    * Multiple-choice options $\to$ option keys (`A`, `B`, `C`, `D`).
 
-``` powershell
-py --version
-```
+---
 
-## 2. Install Dependency
+### 2. File 2: Master Question Bank (`--question-bank "question_bank.xlsx"`)
+* **Default:** `"question_bank.xlsx"`
+* **Loaded in:** `load_reference_bank(path)` (lines 320–367)
+* **What it is:** The master database export containing verified question UUIDs, question texts, options, and correct answers.
+* **Expected Sheets:**
+  1. **`personal_assessment_questions`**:
+     * **Columns:** `id` (UUID), `question_text`, `question_type`, `options`, `correct_answer`, `metadata`, `description`.
+     * **Where used:** In `resolve_question(...)` (line 412) to match headers in `Big5`, `Riasec`, `Work Values`, `Employability`, and `Genearl Apt` to static question database UUIDs.
+  2. **`career_assessment_ai_questions`**:
+     * **Columns:** `question_type`, `stream_id`, and a JSON column `questions` containing `uuid`/`id`, `question`, `options`, `correct_answer`, `category`, `skill_tag`, `difficulty`.
+     * **Where used:** In `resolve_ai_question(...)` (line 631) to map MBA and MCA domain knowledge and domain aptitude questions to their existing UUIDs and correct answer keys.
+* **Why it is strictly required:** The script never creates new question UUIDs. It strictly matches questions against this bank to ensure all generated seed SQL references valid database question records.
 
-``` powershell
-pip install openpyxl
-```
+---
 
-## 3. Run the Script
+### 3. File 3: Curated Production Data (`--production-data "PRODUCTION_ASSESSMENT.xlsx"`)
+* **Default:** `None` (typically `FINAL_PRODUCTION_ASSESSMENT_DATA_v3.xlsx` or `PRODUCTION_ASSESSMENT.xlsx`)
+* **Loaded in:** `load_production_data(path)` (lines 705–750) and `apply_cleaned_rows(...)` (lines 751–764)
+* **What it is:** The curated master file that controls eligibility policy and supplies cleaned/deduplicated student responses.
+* **Expected Sheets:**
+  1. **`Eligible Students`**:
+     * **Columns:** `Email`, `Program`.
+     * Marks student status as `ELIGIBLE` and sets their verified program (`MBA` or `MCA`).
+  2. **`Not Eligible Students`**:
+     * **Columns:** `Email`, `Primary Reason`, `Program`.
+     * If reason is `"Conflicting Duplicate Answer"`, the script sets status to `ALLOW_FIRST_DUPLICATE` (retaining the first answer and allowing seed generation).
+     * If reason is missing sections or identity issues, generation is blocked (`BLOCK`).
+  3. **`Eligible - <Stage>` Sheets** (`Eligible - Big5`, `Eligible - RIASEC`, `Eligible - Employability`, `Eligible - Work Values`, `Eligible - General Aptitude`, `Eligible - MBA Domain`, `Eligible - MBA Aptitude`, `Eligible - MCA Domain`, `Eligible - MCA Aptitude`):
+     * **Where used:** For students marked `ELIGIBLE`, these cleaned rows override the raw form data from the answers file to resolve conflicts and data errors.
 
-``` powershell
-python convert_assessment.py "Assessment Answers.xlsx" --question-bank "question_bank.xlsx" --ai-sql "career_assessment_ai_questions_rows.sql" --allow-partial
-```
+---
 
-## 4. Choose Student Count
+### CLI Flags
 
-After validation, the script asks how many valid students to process.
+* `--allow-partial`:
+  * By default, if any student has blocking validation errors, the script exits without writing SQL.
+  * When `--allow-partial` is passed, the script writes SQL seed files for all valid students while logging issues for invalid ones.
+* `--output-dir <path>`:
+  * Defaults to `output/`. Specifies where `validation_report.csv` and the `seeds/` folder are saved.
 
-Example:
+---
 
-``` text
-Students found: 54
-Valid students: 33
-Validation issues: 27
-Report: output\validation_report.csv
+## Output Files
 
-How many valid students do you want to generate seed files for?
-Enter 0 for all 33:
-```
-
-Enter `0` to process all valid students.
-
-Enter a number such as `5` to process only the first 5 valid students.
-
-## 5. Output
-
-``` text
+```text
 output/
 |-- validation_report.csv
 `-- seeds/
-    |-- abhikdabhi_assessment_seed.sql
-    |-- abhisheknd267_assessment_seed.sql
+    |-- <email_local_part>_assessment_seed.sql
     `-- ...
 ```
 
-The filename uses only the part before `@`.
+1. **`output/validation_report.csv`**:
+   * CSV report detailing validation `ERROR`s and `WARNING`s for every student.
+2. **`output/seeds/<email_local_part>_assessment_seed.sql`**:
+   * PostgreSQL seed transaction for each valid student inserting into:
+     * `public.adaptive_aptitude_sessions`
+     * `public.personal_assessment_attempts`
+     * `public.adaptive_aptitude_responses`
+     * `public.adaptive_aptitude_results`
 
-``` text
-abhikdabhi@gmail.com
-        |
-        v
-abhikdabhi_assessment_seed.sql
+---
+
+## Step-by-Step Instructions
+
+### 1. Environment Setup
+
+```powershell
+python --version
+pip install openpyxl
 ```
 
-## 6. Check Validation
+### 2. Run Migration Script
 
-Review:
-
-``` text
-output/validation_report.csv
+```powershell
+python new_convert_assessment_update_07.py "Assessment profiling answers.xlsx" --question-bank "question_bank.xlsx" --production-data "PRODUCTION_ASSESSMENT.xlsx" --allow-partial
 ```
 
-With `--allow-partial`, valid students can still be processed even when
-other students have validation issues.
+### 3. Select Student Count
 
-## 7. Run Seed in Supabase
-
-Open the required `.sql` file from `output/seeds/`, copy it into the
-Supabase SQL Editor, and run it.
-
-The SQL resolves the existing learner by email:
-
-``` sql
-SELECT id
-INTO v_learner_id
-FROM public.learners
-WHERE lower(email) = lower('student@gmail.com')
-LIMIT 1;
+When prompted:
+```text
+How many valid students do you want to generate seed files for? Enter 0 for all <N>:
 ```
+* Enter `0` to generate seed files for all valid students.
+* Or enter a specific number (e.g. `1`, `5`) to generate a test batch.
 
-The learner must already exist in `public.learners`.
+### 4. Review Reports & Run Seeds in Supabase
 
-## Complete Process
-
-``` text
-Google Forms Answers
-        |
-        v
-Assessment Answers.xlsx
-        |
-        v
-convert_assessment.py
-        |
-        v
-Load Question Bank + AI Questions
-        |
-        v
-Map Answers to Existing Question UUIDs
-        |
-        v
-Validate Students
-        |
-        v
-Choose Number of Students
-        |
-        v
-Generate One Seed File Per Student
-        |
-        v
-Review validation_report.csv
-        |
-        v
-Run Seed in Supabase
-```
-
-## Important
-
--   Do not change existing question UUIDs.
--   The script does not create learners.
--   Student email must already exist in `public.learners`.
--   Review `validation_report.csv` before importing.
--   Test one student seed first before importing all students.
+1. Inspect `output/validation_report.csv` for any warnings or rejected students.
+2. Copy the generated `.sql` file(s) from `output/seeds/` to `skillpassport/supabase/seed/college/` or execute directly in the Supabase SQL editor.
